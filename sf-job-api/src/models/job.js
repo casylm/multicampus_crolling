@@ -20,7 +20,7 @@ function insertJobs(jobs) {
   return { added, skipped: jobs.length - added };
 }
 
-function getAllJobs({ page = 1, limit = 20, source, keyword, isNew } = {}) {
+function getAllJobs({ page = 1, limit = 20, source, keyword, isNew, isFavorite } = {}) {
   const offset = (page - 1) * limit;
   const conditions = [];
   const params = [];
@@ -28,6 +28,7 @@ function getAllJobs({ page = 1, limit = 20, source, keyword, isNew } = {}) {
   if (source) { conditions.push('source = ?'); params.push(source); }
   if (keyword) { conditions.push('(title LIKE ? OR company LIKE ?)'); params.push(`%${keyword}%`, `%${keyword}%`); }
   if (isNew !== undefined) { conditions.push('is_new = ?'); params.push(isNew ? 1 : 0); }
+  if (isFavorite !== undefined) { conditions.push('is_favorite = ?'); params.push(isFavorite ? 1 : 0); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -48,8 +49,16 @@ function getStats() {
   return { total, bySource, lastCrawledAt };
 }
 
+function toggleFavorite(id) {
+  const job = db.prepare('SELECT is_favorite FROM job_postings WHERE id = ?').get(id);
+  if (!job) return null;
+  const next = job.is_favorite ? 0 : 1;
+  db.prepare('UPDATE job_postings SET is_favorite = ? WHERE id = ?').run(next, id);
+  return { id, is_favorite: next };
+}
+
 function markAsNotified() {
   db.prepare('UPDATE job_postings SET is_new = 0 WHERE is_new = 1').run();
 }
 
-module.exports = { insertJob, insertJobs, getAllJobs, getJobById, getStats, markAsNotified };
+module.exports = { insertJob, insertJobs, getAllJobs, getJobById, getStats, toggleFavorite, markAsNotified };

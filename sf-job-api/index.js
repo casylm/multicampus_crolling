@@ -1,11 +1,13 @@
 require('dotenv').config();
 const express = require('express');
 const jobRoutes = require('./src/routes/jobs');
+const coverLetterRoutes = require('./src/routes/coverLetters');
 const { startScheduler } = require('./src/services/scheduler');
 
 const app = express();
 app.use(express.json());
 app.use('/jobs', jobRoutes);
+app.use('/cover-letters', coverLetterRoutes);
 
 // 전역 에러 핸들러
 app.use((err, req, res, next) => {

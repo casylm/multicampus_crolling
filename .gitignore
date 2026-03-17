@@ -3,9 +3,8 @@
 sf-job-api/.env
 
 # DB 파일 (로컬 데이터)
-sf-job-api/data/*.db
-sf-job-api/data/*.db-shm
-sf-job-api/data/*.db-wal
+data/
+sf-job-api/data/
 
 # Node.js
 node_modules/

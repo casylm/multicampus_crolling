@@ -18,7 +18,7 @@ db.exec(`
   )
 `);
 
-// 기존 DB에 컬럼이 없을 경우 마이그레이션
+// 기존 DB 마이그레이션
 try { db.exec('ALTER TABLE job_postings ADD COLUMN is_favorite INTEGER DEFAULT 0'); } catch {}
 
 db.exec(`
@@ -28,9 +28,12 @@ db.exec(`
     url         TEXT UNIQUE NOT NULL,
     description TEXT,
     source      TEXT,
+    is_favorite INTEGER DEFAULT 0,
     collected_at TEXT,
     created_at  TEXT DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+try { db.exec('ALTER TABLE cover_letters ADD COLUMN is_favorite INTEGER DEFAULT 0'); } catch {}
 
 module.exports = db;

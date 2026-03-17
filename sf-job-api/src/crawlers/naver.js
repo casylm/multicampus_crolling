@@ -7,10 +7,11 @@ const QUERIES = [
   'Salesforce 개발자 구인',
 ];
 
-async function crawlNaver() {
+async function crawlNaver(customQueries) {
   const results = [];
+  const queries = customQueries || QUERIES;
 
-  for (const query of QUERIES) {
+  for (const query of queries) {
     try {
       const response = await axios.get(NAVER_API_URL, {
         headers: {

@@ -6,6 +6,7 @@ const { startScheduler } = require('./src/services/scheduler');
 
 const app = express();
 app.use(express.json());
+app.get('/', (req, res) => res.redirect('/jobs/search'));
 app.use('/jobs', jobRoutes);
 app.use('/cover-letters', coverLetterRoutes);
 

@@ -3,6 +3,9 @@ const router = express.Router();
 const { getAllJobs, getJobById, getStats, toggleFavorite } = require('../models/job');
 const { runAllCrawlers } = require('../services/crawlerService');
 const { analyzeInsights } = require('../services/insightService');
+const { layout, escHtml, pagination } = require('../utils/layout');
+
+const PAGE_SIZE = 10;
 
 // GET /jobs
 router.get('/', (req, res) => {
@@ -10,8 +13,7 @@ router.get('/', (req, res) => {
   const result = getAllJobs({
     page: Number(page) || 1,
     limit: Number(limit) || 20,
-    source,
-    keyword,
+    source, keyword,
     isNew: isNew !== undefined ? isNew === 'true' : undefined,
     isFavorite: isFavorite !== undefined ? isFavorite === 'true' : undefined,
   });
@@ -19,14 +21,10 @@ router.get('/', (req, res) => {
 });
 
 // GET /jobs/stats
-router.get('/stats', (req, res) => {
-  res.json(getStats());
-});
+router.get('/stats', (req, res) => res.json(getStats()));
 
-// GET /jobs/insights — 공통 자격요건 분석 JSON
-router.get('/insights', (req, res) => {
-  res.json(analyzeInsights());
-});
+// GET /jobs/insights — JSON
+router.get('/insights', (req, res) => res.json(analyzeInsights()));
 
 // GET /jobs/insights-view — 자격요건 분석 HTML
 router.get('/insights-view', (req, res) => {
@@ -40,177 +38,180 @@ router.get('/insights-view', (req, res) => {
         <div class="bar-track"><div class="bar-fill" style="width:${item.ratio}%"></div></div>
         <div class="bar-meta">${item.jobCount}건 (${item.ratio}%)</div>
       </div>`).join('');
-    return `<div class="card"><h3>${escHtml(category)}</h3>${bars}</div>`;
+    return `<div class="card"><h3 style="font-size:.95rem;font-weight:700;margin-bottom:16px;color:var(--primary)">${escHtml(category)}</h3>${bars}</div>`;
   }).join('');
 
-  res.send(`<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>자격요건 분석</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f7fa;color:#333}
-  header{background:#0070d2;color:#fff;padding:16px 32px;display:flex;align-items:center;gap:16px}
-  header h1{font-size:1.2rem;font-weight:600}
-  header a{color:rgba(255,255,255,.8);text-decoration:none;font-size:.9rem}
-  header a:hover{color:#fff}
-  .container{max-width:1000px;margin:24px auto;padding:0 16px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
-  .card{background:#fff;border-radius:8px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.1)}
-  .card h3{font-size:1rem;font-weight:600;margin-bottom:16px;color:#0070d2;border-bottom:2px solid #e8f4fd;padding-bottom:8px}
-  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-  .bar-label{width:160px;font-size:.83rem;flex-shrink:0}
-  .bar-track{flex:1;background:#f0f4f8;border-radius:4px;height:16px;overflow:hidden}
-  .bar-fill{height:100%;background:linear-gradient(90deg,#0070d2,#1ab3ff);border-radius:4px}
-  .bar-meta{width:80px;font-size:.78rem;color:#666;text-align:right;flex-shrink:0}
-  .summary{grid-column:1/-1;background:#fff3cd;border-radius:8px;padding:16px 20px;border-left:4px solid #ff6b35}
-  .summary h3{margin-bottom:8px;color:#ff6b35}
-  .summary p{font-size:.9rem;line-height:1.6}
-  @media(max-width:700px){.container{grid-template-columns:1fr}}
-</style>
-</head>
-<body>
-<header>
-  <h1>📊 자격요건 분석</h1>
-  <span style="flex:1"></span>
-  <a href="/jobs/view">← 공고 목록</a>
-</header>
-<div class="container">
-  <div class="summary">
-    <h3>분석 대상: 총 ${totalJobs}건의 Salesforce 채용공고</h3>
-    <p>각 키워드가 등장한 공고 수와 전체 대비 비율입니다. 비율이 높을수록 해당 기술/자격이 많이 요구됩니다.</p>
-  </div>
-  ${sections}
-</div>
-</body></html>`);
+  res.send(layout({
+    title: '자격요건 분석',
+    activeTab: 'insights',
+    content: `
+      <div class="card col-full" style="border-left:4px solid var(--accent)">
+        <h3 style="color:var(--accent);margin-bottom:6px">분석 대상: 총 ${totalJobs}건의 Salesforce 채용공고</h3>
+        <p style="font-size:.85rem;color:var(--muted)">각 키워드가 등장한 공고 수와 전체 대비 비율입니다. 비율이 높을수록 해당 기술/자격이 많이 요구됩니다.</p>
+      </div>
+      <div class="grid-2">${sections}</div>
+    `,
+  }));
 });
 
-// GET /jobs/view — HTML 목록 (즐겨찾기 + 링크)
-router.get('/view', (req, res) => {
-  const { page, keyword, filter } = req.query;
+// GET /jobs/search — 키워드 실시간 크롤링 (메인)
+router.get('/search', async (req, res) => {
+  const { q, page } = req.query;
   const currentPage = Number(page) || 1;
-  const isFavorite = filter === 'favorites' ? true : undefined;
-  const { data: jobs, total } = getAllJobs({ page: currentPage, limit: 50, keyword, isFavorite });
-  const totalPages = Math.ceil(total / 50);
+  let crawlResult = null;
+  let error = null;
 
-  const buildUrl = (p, kw, f) => {
-    const params = new URLSearchParams();
-    if (p > 1) params.set('page', p);
-    if (kw) params.set('keyword', kw);
-    if (f) params.set('filter', f);
-    const q = params.toString();
-    return `/jobs/view${q ? '?' + q : ''}`;
-  };
+  // 첫 페이지에서만 크롤링 실행
+  if (q && q.trim() && currentPage === 1) {
+    try {
+      const { crawlNaver } = require('../crawlers/naver');
+      const { insertJobs } = require('../models/job');
+      const results = await crawlNaver([q.trim()]);
+      crawlResult = insertJobs(results);
+      crawlResult.total = results.length;
+    } catch (err) {
+      error = err.message;
+    }
+  }
 
-  const jobRows = jobs.map(j => `
-    <tr id="row-${j.id}">
+  // DB에서 키워드 필터로 페이지 조회
+  const { data: jobs, total } = q
+    ? getAllJobs({ page: currentPage, limit: PAGE_SIZE, keyword: q.trim() })
+    : { data: [], total: 0 };
+
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const buildUrl = (p) => `/jobs/search?q=${encodeURIComponent(q || '')}&page=${p}`;
+
+  const rows = jobs.map(j => `
+    <tr>
       <td>
-        <button class="star ${j.is_favorite ? 'on' : ''}" onclick="toggleFav(${j.id}, this)" title="즐겨찾기">
+        <button class="star ${j.is_favorite ? 'on' : ''}" onclick="toggleFav(${j.id},this)">
           ${j.is_favorite ? '★' : '☆'}
         </button>
       </td>
       <td><a href="${j.url}" target="_blank" rel="noopener">${escHtml(j.title)}</a></td>
       <td>${escHtml(j.company)}</td>
-      <td class="desc">${escHtml((j.description || '').slice(0, 80))}…</td>
-      <td><span class="badge">${j.source}</span></td>
+      <td class="td-desc">${escHtml((j.description || '').slice(0, 90))}…</td>
       <td>${j.collected_at ? j.collected_at.slice(0, 10) : ''}</td>
     </tr>`).join('');
 
-  const pagination = Array.from({ length: Math.min(totalPages, 20) }, (_, i) => {
-    const p = i + 1;
-    const active = p === currentPage ? ' class="active"' : '';
-    return `<a href="${buildUrl(p, keyword, filter)}"${active}>${p}</a>`;
-  }).join('');
-
-  const kw = keyword ? escHtml(keyword) : '';
-  const isFavFilter = filter === 'favorites';
-
-  res.send(`<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Salesforce 채용공고</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f7fa;color:#333}
-  header{background:#0070d2;color:#fff;padding:14px 28px;display:flex;align-items:center;gap:14px}
-  header h1{font-size:1.15rem;font-weight:600}
-  nav a{color:rgba(255,255,255,.85);text-decoration:none;font-size:.88rem;padding:6px 12px;border-radius:5px;transition:background .15s}
-  nav a:hover,nav a.on{background:rgba(255,255,255,.2);color:#fff}
-  .container{max-width:1200px;margin:20px auto;padding:0 16px}
-  .toolbar{display:flex;gap:10px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
-  .toolbar form{display:flex;gap:8px;flex:1;min-width:240px}
-  .toolbar input{flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:.88rem}
-  .toolbar button{padding:8px 14px;background:#0070d2;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:.88rem}
-  .filter-btns{display:flex;gap:8px}
-  .filter-btns a{padding:7px 14px;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:#555;font-size:.85rem;background:#fff;white-space:nowrap}
-  .filter-btns a.on{background:#ffd700;border-color:#e6c200;color:#333;font-weight:600}
-  .ext-btns{display:flex;gap:8px}
-  .ext-btns a{padding:7px 14px;border-radius:6px;text-decoration:none;font-size:.85rem;white-space:nowrap;color:#fff}
-  .btn-orange{background:#ff6b35}
-  .btn-purple{background:#7b5ea7}
-  .meta{font-size:.85rem;color:#666;margin-bottom:10px}
-  table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)}
-  th{background:#f0f4f8;padding:11px 13px;text-align:left;font-size:.82rem;color:#555;font-weight:600}
-  td{padding:10px 13px;font-size:.83rem;border-top:1px solid #f0f0f0;vertical-align:middle}
-  td a{color:#0070d2;text-decoration:none;font-weight:500}
-  td a:hover{text-decoration:underline}
-  td.desc{color:#666;max-width:300px}
-  .badge{background:#e8f4fd;color:#0070d2;padding:2px 8px;border-radius:12px;font-size:.75rem}
-  tr:hover td{background:#fafcff}
-  .star{background:none;border:none;cursor:pointer;font-size:1.2rem;color:#ccc;line-height:1;padding:0;transition:color .15s,transform .15s}
-  .star.on{color:#ffd700}
-  .star:hover{color:#ffd700;transform:scale(1.2)}
-  .pagination{margin-top:18px;display:flex;gap:5px;flex-wrap:wrap}
-  .pagination a{padding:6px 11px;border:1px solid #ddd;border-radius:4px;text-decoration:none;color:#333;font-size:.83rem;background:#fff}
-  .pagination a.active{background:#0070d2;color:#fff;border-color:#0070d2}
-  .pagination a:hover:not(.active){background:#f0f4f8}
-  @media(max-width:768px){td.desc,th:nth-child(4){display:none}}
-</style>
-</head>
-<body>
-<header>
-  <h1>⚡ Salesforce 채용공고</h1>
-  <nav style="display:flex;gap:4px;margin-left:auto">
-    <a href="/jobs/view" ${!isFavFilter ? 'class="on"' : ''}>공고 목록</a>
-    <a href="/cover-letters/view">자소서 목록</a>
-    <a href="/jobs/insights-view">자격요건 분석</a>
-  </nav>
-</header>
-<div class="container">
-  <div class="toolbar">
-    <form method="get" action="/jobs/view">
-      <input type="text" name="keyword" placeholder="키워드 검색 (예: Apex, LWC…)" value="${kw}">
-      ${isFavFilter ? '<input type="hidden" name="filter" value="favorites">' : ''}
-      <button type="submit">검색</button>
-    </form>
-    <div class="filter-btns">
-      <a href="${buildUrl(1, keyword, '')}" ${!isFavFilter ? 'class="on"' : ''}>전체</a>
-      <a href="${buildUrl(1, keyword, 'favorites')}" ${isFavFilter ? 'class="on"' : ''}>★ 즐겨찾기</a>
+  const resultSection = q ? `
+    <div class="result-header">
+      <h3>"${escHtml(q)}" 검색결과 ${total}건</h3>
+      ${crawlResult ? `<span class="badge ${crawlResult.added > 0 ? 'badge-new' : 'badge-skip'}">
+        ${crawlResult.added > 0 ? `신규 ${crawlResult.added}건 저장` : '모두 기존 데이터'}
+      </span>` : ''}
     </div>
-  </div>
-  <p class="meta">${currentPage}/${totalPages} 페이지 · ${total}건</p>
-  <table>
-    <thead><tr><th>★</th><th>공고 제목</th><th>회사</th><th>요약</th><th>소스</th><th>수집일</th></tr></thead>
-    <tbody>${jobRows || '<tr><td colspan="6" style="text-align:center;padding:30px;color:#999">공고가 없습니다.</td></tr>'}</tbody>
-  </table>
-  <div class="pagination">${pagination}</div>
-</div>
-<script>
-async function toggleFav(id, btn) {
-  const res = await fetch('/jobs/' + id + '/favorite', { method: 'POST' });
-  const data = await res.json();
-  if (data.is_favorite) {
-    btn.textContent = '★'; btn.classList.add('on');
-  } else {
-    btn.textContent = '☆'; btn.classList.remove('on');
-  }
-}
-</script>
-</body></html>`);
+    <p class="meta">${currentPage} / ${totalPages || 1} 페이지</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>★</th><th>공고 제목</th><th>출처</th><th>내용 요약</th><th>수집일</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🔍</div><p>검색 결과가 없습니다.</p></div></td></tr>'}</tbody>
+      </table>
+    </div>
+    ${pagination(currentPage, totalPages, buildUrl)}
+  ` : `
+    <div class="empty">
+      <div class="empty-icon">🔍</div>
+      <p>키워드를 입력하고 검색해보세요.<br><span style="font-size:.8rem;color:#A0AEC0">예: Apex 개발자, LWC, Marketing Cloud, CPQ…</span></p>
+    </div>
+  `;
+
+  res.send(layout({
+    title: '채용 검색',
+    activeTab: 'search',
+    content: `
+      <div class="card">
+        <form method="get" action="/jobs/search" onsubmit="this.querySelector('button').textContent='검색 중…'">
+          <div class="search-wrap">
+            <input class="search-input" type="text" name="q" placeholder="예: Apex 개발자, LWC, Marketing Cloud…" value="${escHtml(q || '')}" autofocus>
+            <button type="submit" class="btn btn-primary">🔍 검색</button>
+          </div>
+        </form>
+        <p class="hint">입력한 키워드로 네이버를 실시간 검색합니다. 신규 결과는 DB에 자동 저장되며, 별표(★)로 즐겨찾기할 수 있습니다.</p>
+      </div>
+      ${error ? `<div class="error-box">오류 발생: ${escHtml(error)}</div>` : ''}
+      ${resultSection}
+      <script>
+      async function toggleFav(id, btn) {
+        const r = await fetch('/jobs/'+id+'/favorite', {method:'POST'});
+        const d = await r.json();
+        btn.textContent = d.is_favorite ? '★' : '☆';
+        d.is_favorite ? btn.classList.add('on') : btn.classList.remove('on');
+      }
+      </script>
+    `,
+  }));
 });
 
-// POST /jobs/:id/favorite — 즐겨찾기 토글
+// GET /jobs/view — 전체 공고 목록 (즐겨찾기 필터 포함)
+router.get('/view', (req, res) => {
+  const { page, keyword, filter } = req.query;
+  const currentPage = Number(page) || 1;
+  const isFavorite = filter === 'favorites' ? true : undefined;
+  const { data: jobs, total } = getAllJobs({ page: currentPage, limit: PAGE_SIZE, keyword, isFavorite });
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const buildUrl = (p) => {
+    const params = new URLSearchParams();
+    if (p > 1) params.set('page', p);
+    if (keyword) params.set('keyword', keyword);
+    if (filter) params.set('filter', filter);
+    const q = params.toString();
+    return `/jobs/view${q ? '?' + q : ''}`;
+  };
+
+  const rows = jobs.map(j => `
+    <tr>
+      <td>
+        <button class="star ${j.is_favorite ? 'on' : ''}" onclick="toggleFav(${j.id},this)">
+          ${j.is_favorite ? '★' : '☆'}
+        </button>
+      </td>
+      <td><a href="${j.url}" target="_blank" rel="noopener">${escHtml(j.title)}</a></td>
+      <td>${escHtml(j.company)}</td>
+      <td class="td-desc">${escHtml((j.description || '').slice(0, 90))}…</td>
+      <td><span class="badge badge-src">${j.source}</span></td>
+      <td>${j.collected_at ? j.collected_at.slice(0, 10) : ''}</td>
+    </tr>`).join('');
+
+  res.send(layout({
+    title: '공고 목록',
+    activeTab: filter === 'favorites' ? 'fav-jobs' : 'jobs',
+    content: `
+      <div class="card" style="padding:16px 20px">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <form method="get" action="/jobs/view" style="display:flex;gap:8px;flex:1;min-width:220px">
+            <input class="search-input" style="border-radius:50px;padding:9px 16px;font-size:.88rem" type="text" name="keyword" placeholder="키워드 필터…" value="${escHtml(keyword || '')}">
+            ${filter ? `<input type="hidden" name="filter" value="${escHtml(filter)}">` : ''}
+            <button type="submit" class="btn btn-primary" style="padding:9px 18px;font-size:.85rem">검색</button>
+          </form>
+          <div class="chip-row" style="margin:0">
+            <a href="/jobs/view${keyword ? '?keyword=' + encodeURIComponent(keyword) : ''}" class="chip${!filter ? ' on' : ''}">전체</a>
+            <a href="/jobs/view?filter=favorites${keyword ? '&keyword=' + encodeURIComponent(keyword) : ''}" class="chip${filter === 'favorites' ? ' on' : ''}">★ 즐겨찾기</a>
+          </div>
+        </div>
+      </div>
+      <p class="meta">${currentPage} / ${totalPages || 1} 페이지 · 총 ${total}건</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>★</th><th>공고 제목</th><th>출처</th><th>내용 요약</th><th>소스</th><th>수집일</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📭</div><p>공고가 없습니다.</p></div></td></tr>'}</tbody>
+        </table>
+      </div>
+      ${pagination(currentPage, totalPages, buildUrl)}
+      <script>
+      async function toggleFav(id, btn) {
+        const r = await fetch('/jobs/'+id+'/favorite', {method:'POST'});
+        const d = await r.json();
+        btn.textContent = d.is_favorite ? '★' : '☆';
+        d.is_favorite ? btn.classList.add('on') : btn.classList.remove('on');
+      }
+      </script>
+    `,
+  }));
+});
+
+// POST /jobs/:id/favorite
 router.post('/:id/favorite', (req, res) => {
   const result = toggleFavorite(Number(req.params.id));
   if (!result) return res.status(404).json({ message: '공고를 찾을 수 없습니다.' });
@@ -233,13 +234,5 @@ router.post('/crawl', async (req, res) => {
     res.status(500).json({ message: '크롤링 중 오류가 발생했습니다.', error: err.message });
   }
 });
-
-function escHtml(str = '') {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 module.exports = router;

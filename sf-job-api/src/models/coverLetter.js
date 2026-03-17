@@ -15,7 +15,7 @@ function insertCoverLetters(items) {
   return { added, skipped: items.length - added };
 }
 
-function getAllCoverLetters({ page = 1, limit = 50, keyword } = {}) {
+function getAllCoverLetters({ page = 1, limit = 10, keyword, isFavorite } = {}) {
   const offset = (page - 1) * limit;
   const conditions = [];
   const params = [];
@@ -23,6 +23,10 @@ function getAllCoverLetters({ page = 1, limit = 50, keyword } = {}) {
   if (keyword) {
     conditions.push('(title LIKE ? OR description LIKE ?)');
     params.push(`%${keyword}%`, `%${keyword}%`);
+  }
+  if (isFavorite !== undefined) {
+    conditions.push('is_favorite = ?');
+    params.push(isFavorite ? 1 : 0);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -32,4 +36,12 @@ function getAllCoverLetters({ page = 1, limit = 50, keyword } = {}) {
   return { data, total, page, limit };
 }
 
-module.exports = { insertCoverLetters, getAllCoverLetters };
+function toggleCoverLetterFavorite(id) {
+  const item = db.prepare('SELECT is_favorite FROM cover_letters WHERE id = ?').get(id);
+  if (!item) return null;
+  const next = item.is_favorite ? 0 : 1;
+  db.prepare('UPDATE cover_letters SET is_favorite = ? WHERE id = ?').run(next, id);
+  return { id, is_favorite: next };
+}
+
+module.exports = { insertCoverLetters, getAllCoverLetters, toggleCoverLetterFavorite };
